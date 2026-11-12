@@ -197,20 +197,3 @@ if uploaded is not None:
 
 st.markdown("---")
 st.caption("Effects are approximate DSP transformations (pitch + spectral shaping). Noise reduction uses simple spectral subtraction. For higher quality results consider specialized tools such as RVC or noisereduce. API keys are accepted but not required.")
-
-How the new feature works
-
-    Checkbox: “Remove background noise and normalize audio”
-    When checked, the app:
-        Estimates noise from the first 0.5 seconds
-        Applies mild spectral subtraction
-        Runs a light high-pass (preemphasis)
-        Peak-normalizes to –0.4 dBFS
-    It runs before the selected voice effect so the effect is applied to a cleaner signal.
-    Works for both MP3 and WAV uploads.
-    Download filenames include _denoised when the option is used.
-
-No changes are needed to requirements.txt — the feature uses only libraries already listed (librosa, numpy, etc.).
-
-Replace your current app.py with the code above, commit, and redeploy.
-

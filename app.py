@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 st.set_page_config(page_title="Voice Modifier", page_icon="🎙️", layout="wide")
 
 st.title("🎙️ Voice Modifier")
-st.caption("Upload MP3/WAV → apply effects, noise reduction, or keep original. All processing is local.")
+st.caption("Upload MP3/WAV → apply effects, noise reduction, stereo, or keep original. All processing is local.")
 
 # Sidebar for optional API keys
 with st.sidebar:
@@ -36,9 +36,29 @@ EFFECTS = {
 
 effect = st.selectbox("Choose effect", list(EFFECTS.keys()))
 reduce_noise = st.checkbox("Remove background noise and normalize audio", value=False)
+make_stereo = st.checkbox("Output as stereo", value=True)
+
+def to_stereo(y, sr):
+    """Convert mono to stereo with light widening, or keep stereo."""
+    if y.ndim == 1:
+        # Create dual-mono with slight delay on right channel for width
+        delay_samples = int(0.012 * sr)  # ~12 ms
+        left = y
+        right = np.pad(y, (delay_samples, 0))[:len(y)]
+        # Slight level difference
+        right = right * 0.97
+        y_stereo = np.vstack([left, right])
+        return y_stereo
+    else:
+        return y  # already stereo
 
 def reduce_noise_and_normalize(y, sr):
-    """Simple spectral noise reduction + peak normalization."""
+    """Simple spectral noise reduction + peak normalization (works on mono or stereo)."""
+    if y.ndim == 2:
+        # Process each channel
+        cleaned = [reduce_noise_and_normalize(ch, sr) for ch in y]
+        return np.vstack(cleaned)
+
     noise_samples = int(0.5 * sr)
     if len(y) > noise_samples:
         noise_clip = y[:noise_samples]
@@ -63,7 +83,11 @@ def reduce_noise_and_normalize(y, sr):
     return y_clean
 
 def apply_effect(y, sr, effect_name):
-    """Apply the selected voice transformation."""
+    """Apply the selected voice transformation (supports mono or stereo)."""
+    if y.ndim == 2:
+        processed = [apply_effect(ch, sr, effect_name) for ch in y]
+        return np.vstack(processed)
+
     if effect_name == "original":
         y_out = y.copy()
     elif effect_name == "deep":
@@ -96,7 +120,6 @@ def apply_effect(y, sr, effect_name):
     else:
         y_out = y
 
-    # Always normalize after processing
     peak = np.max(np.abs(y_out))
     if peak > 0:
         y_out = y_out / peak * 0.95
@@ -113,18 +136,23 @@ if uploaded is not None:
                 tmp.write(uploaded.read())
                 tmp_path = tmp.name
 
-            y, sr = librosa.load(tmp_path, sr=None, mono=True)
+            # Load as multi-channel (stereo if available)
+            y, sr = librosa.load(tmp_path, sr=None, mono=False)
             os.unlink(tmp_path)
 
-            # Optional noise reduction (applied first)
+            # Force stereo if requested
+            if make_stereo:
+                y = to_stereo(y, sr)
+
+            # Optional noise reduction
             if reduce_noise:
                 y = reduce_noise_and_normalize(y, sr)
 
             y_mod = apply_effect(y, sr, EFFECTS[effect])
 
-            # WAV buffer for playback and conversion
+            # Write WAV (handles mono or stereo)
             wav_buf = BytesIO()
-            sf.write(wav_buf, y_mod, sr, format="WAV")
+            sf.write(wav_buf, y_mod.T if y_mod.ndim == 2 else y_mod, sr, format="WAV")
             wav_buf.seek(0)
             wav_bytes = wav_buf.getvalue()
 
@@ -142,12 +170,13 @@ if uploaded is not None:
             base_name = uploaded.name.rsplit(".", 1)[0]
             effect_key = EFFECTS[effect]
             noise_tag = "_denoised" if reduce_noise else ""
+            stereo_tag = "_stereo" if make_stereo else ""
 
             if download_format == "WAV":
                 st.download_button(
                     label="Download audio (WAV)",
                     data=wav_bytes,
-                    file_name=f"{effect_key}{noise_tag}_{base_name}.wav",
+                    file_name=f"{effect_key}{noise_tag}{stereo_tag}_{base_name}.wav",
                     mime="audio/wav"
                 )
             else:
@@ -159,18 +188,22 @@ if uploaded is not None:
                 st.download_button(
                     label="Download audio (MP3)",
                     data=mp3_bytes,
-                    file_name=f"{effect_key}{noise_tag}_{base_name}.mp3",
+                    file_name=f"{effect_key}{noise_tag}{stereo_tag}_{base_name}.mp3",
                     mime="audio/mpeg"
                 )
 
-            with st.expander("Show spectrograms (original vs modified)"):
+            with st.expander("Show spectrograms (original vs processed)"):
+                # Use mono version for display if stereo
+                y_display = y.mean(axis=0) if y.ndim == 2 else y
+                y_mod_display = y_mod.mean(axis=0) if y_mod.ndim == 2 else y_mod
+
                 col1, col2 = st.columns(2)
 
                 with col1:
                     st.write("Original")
                     fig1, ax1 = plt.subplots(figsize=(8, 4))
                     librosa.display.specshow(
-                        librosa.amplitude_to_db(np.abs(librosa.stft(y)), ref=np.max),
+                        librosa.amplitude_to_db(np.abs(librosa.stft(y_display)), ref=np.max),
                         sr=sr, x_axis="time", y_axis="hz", ax=ax1
                     )
                     ax1.set_title("Original")
@@ -182,7 +215,7 @@ if uploaded is not None:
                     st.write("Processed")
                     fig2, ax2 = plt.subplots(figsize=(8, 4))
                     librosa.display.specshow(
-                        librosa.amplitude_to_db(np.abs(librosa.stft(y_mod)), ref=np.max),
+                        librosa.amplitude_to_db(np.abs(librosa.stft(y_mod_display)), ref=np.max),
                         sr=sr, x_axis="time", y_axis="hz", ax=ax2
                     )
                     ax2.set_title("Processed")
@@ -195,4 +228,4 @@ if uploaded is not None:
             st.info("Make sure the file is a valid MP3 or WAV. For MP3 support, ffmpeg must be available. Noise reduction works best when the first half-second contains mostly background noise.")
 
 st.markdown("---")
-st.caption("Select 'Original (no modification)' to keep the voice unchanged. Optional noise reduction + normalization can still be applied. Effects are approximate DSP transformations. API keys are accepted but not required.")
+st.caption("Select 'Original (no modification)' to keep the voice unchanged. Stereo option converts mono to stereo with light widening. Effects are approximate DSP transformations. API keys are accepted but not required.")

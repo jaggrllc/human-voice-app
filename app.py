@@ -11,16 +11,15 @@ import matplotlib.pyplot as plt
 st.set_page_config(page_title="Voice Modifier", page_icon="🎙️", layout="wide")
 
 st.title("🎙️ Voice Modifier")
-st.caption("Upload MP3/WAV → apply deep / gender-swap / robot effects. All processing is local.")
+st.caption("Upload MP3/WAV → apply deep / gender-swap / robot effects + optional noise reduction. All processing is local.")
 
-# Sidebar for optional API keys (not required for core function)
+# Sidebar for optional API keys
 with st.sidebar:
     st.header("Optional API Keys")
     openai_key = st.text_input("OpenAI API Key", type="password", help="Optional – not used by core effects")
     serp_key = st.text_input("SerpAPI Key", type="password", help="Optional – not used by core effects")
     st.info("Core effects run entirely locally for security and offline use.")
 
-# File uploader with strict types
 uploaded = st.file_uploader(
     "Upload voice recording (MP3 or WAV)",
     type=["mp3", "wav"],
@@ -35,6 +34,36 @@ EFFECTS = {
 }
 
 effect = st.selectbox("Choose effect", list(EFFECTS.keys()))
+reduce_noise = st.checkbox("Remove background noise and normalize audio", value=False)
+
+def reduce_noise_and_normalize(y, sr):
+    """Simple spectral noise reduction + peak normalization."""
+    # Estimate noise profile from the first 0.5 seconds (or less if shorter)
+    noise_samples = int(0.5 * sr)
+    if len(y) > noise_samples:
+        noise_clip = y[:noise_samples]
+        noise_stft = np.abs(librosa.stft(noise_clip))
+        noise_profile = np.mean(noise_stft, axis=1)
+
+        # Spectral subtraction
+        D = librosa.stft(y)
+        mag = np.abs(D)
+        phase = np.angle(D)
+        noise_mag = noise_profile[:, np.newaxis]
+        mag_clean = np.maximum(mag - 1.5 * noise_mag, 0.05 * mag)  # mild subtraction
+        D_clean = mag_clean * np.exp(1j * phase)
+        y_clean = librosa.istft(D_clean)
+    else:
+        y_clean = y
+
+    # High-pass to reduce low rumble
+    y_clean = librosa.effects.preemphasis(y_clean, coef=0.95)
+
+    # Peak normalize
+    peak = np.max(np.abs(y_clean))
+    if peak > 0:
+        y_clean = y_clean / peak * 0.95
+    return y_clean
 
 def apply_effect(y, sr, effect_name):
     """Apply the selected voice transformation."""
@@ -68,6 +97,7 @@ def apply_effect(y, sr, effect_name):
     else:
         y_out = y
 
+    # Always normalize after effect
     peak = np.max(np.abs(y_out))
     if peak > 0:
         y_out = y_out / peak * 0.95
@@ -87,9 +117,13 @@ if uploaded is not None:
             y, sr = librosa.load(tmp_path, sr=None, mono=True)
             os.unlink(tmp_path)
 
+            # Optional noise reduction + normalization (applied first)
+            if reduce_noise:
+                y = reduce_noise_and_normalize(y, sr)
+
             y_mod = apply_effect(y, sr, EFFECTS[effect])
 
-            # Always create a WAV buffer first (used for playback and as source for MP3)
+            # WAV buffer for playback and as source for MP3
             wav_buf = BytesIO()
             sf.write(wav_buf, y_mod, sr, format="WAV")
             wav_buf.seek(0)
@@ -108,16 +142,16 @@ if uploaded is not None:
 
             base_name = uploaded.name.rsplit(".", 1)[0]
             effect_key = EFFECTS[effect]
+            noise_tag = "_denoised" if reduce_noise else ""
 
             if download_format == "WAV":
                 st.download_button(
                     label="Download modified audio (WAV)",
                     data=wav_bytes,
-                    file_name=f"modified_{effect_key}_{base_name}.wav",
+                    file_name=f"modified_{effect_key}{noise_tag}_{base_name}.wav",
                     mime="audio/wav"
                 )
             else:
-                # Convert WAV bytes to MP3 via pydub
                 audio_segment = AudioSegment.from_wav(BytesIO(wav_bytes))
                 mp3_buf = BytesIO()
                 audio_segment.export(mp3_buf, format="mp3", bitrate="192k")
@@ -126,7 +160,7 @@ if uploaded is not None:
                 st.download_button(
                     label="Download modified audio (MP3)",
                     data=mp3_bytes,
-                    file_name=f"modified_{effect_key}_{base_name}.mp3",
+                    file_name=f"modified_{effect_key}{noise_tag}_{base_name}.mp3",
                     mime="audio/mpeg"
                 )
 
@@ -159,7 +193,24 @@ if uploaded is not None:
 
         except Exception as e:
             st.error(f"Error processing file: {e}")
-            st.info("Make sure the file is a valid MP3 or WAV. For MP3 support (upload and download), ffmpeg must be installed on the system.")
+            st.info("Make sure the file is a valid MP3 or WAV. For MP3 support, ffmpeg must be available. Noise reduction works best when the first half-second contains mostly background noise.")
 
 st.markdown("---")
-st.caption("Effects are approximate DSP transformations (pitch + spectral shaping). For higher quality voice conversion consider specialized models such as RVC. API keys are accepted but not required for these effects.")
+st.caption("Effects are approximate DSP transformations (pitch + spectral shaping). Noise reduction uses simple spectral subtraction. For higher quality results consider specialized tools such as RVC or noisereduce. API keys are accepted but not required.")
+
+How the new feature works
+
+    Checkbox: “Remove background noise and normalize audio”
+    When checked, the app:
+        Estimates noise from the first 0.5 seconds
+        Applies mild spectral subtraction
+        Runs a light high-pass (preemphasis)
+        Peak-normalizes to –0.4 dBFS
+    It runs before the selected voice effect so the effect is applied to a cleaner signal.
+    Works for both MP3 and WAV uploads.
+    Download filenames include _denoised when the option is used.
+
+No changes are needed to requirements.txt — the feature uses only libraries already listed (librosa, numpy, etc.).
+
+Replace your current app.py with the code above, commit, and redeploy.
+

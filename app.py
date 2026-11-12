@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 st.set_page_config(page_title="Voice Modifier", page_icon="🎙️", layout="wide")
 
 st.title("🎙️ Voice Modifier")
-st.caption("Upload MP3/WAV → apply deep / gender-swap / robot effects + optional noise reduction. All processing is local.")
+st.caption("Upload MP3/WAV → apply effects, noise reduction, or keep original. All processing is local.")
 
 # Sidebar for optional API keys
 with st.sidebar:
@@ -27,6 +27,7 @@ uploaded = st.file_uploader(
 )
 
 EFFECTS = {
+    "Original (no modification)": "original",
     "Deep & Rich (Morgan Freeman / Don LaFontaine style)": "deep",
     "Male → Female": "male_to_female",
     "Female → Male": "female_to_male",
@@ -38,28 +39,24 @@ reduce_noise = st.checkbox("Remove background noise and normalize audio", value=
 
 def reduce_noise_and_normalize(y, sr):
     """Simple spectral noise reduction + peak normalization."""
-    # Estimate noise profile from the first 0.5 seconds (or less if shorter)
     noise_samples = int(0.5 * sr)
     if len(y) > noise_samples:
         noise_clip = y[:noise_samples]
         noise_stft = np.abs(librosa.stft(noise_clip))
         noise_profile = np.mean(noise_stft, axis=1)
 
-        # Spectral subtraction
         D = librosa.stft(y)
         mag = np.abs(D)
         phase = np.angle(D)
         noise_mag = noise_profile[:, np.newaxis]
-        mag_clean = np.maximum(mag - 1.5 * noise_mag, 0.05 * mag)  # mild subtraction
+        mag_clean = np.maximum(mag - 1.5 * noise_mag, 0.05 * mag)
         D_clean = mag_clean * np.exp(1j * phase)
         y_clean = librosa.istft(D_clean)
     else:
         y_clean = y
 
-    # High-pass to reduce low rumble
     y_clean = librosa.effects.preemphasis(y_clean, coef=0.95)
 
-    # Peak normalize
     peak = np.max(np.abs(y_clean))
     if peak > 0:
         y_clean = y_clean / peak * 0.95
@@ -67,7 +64,9 @@ def reduce_noise_and_normalize(y, sr):
 
 def apply_effect(y, sr, effect_name):
     """Apply the selected voice transformation."""
-    if effect_name == "deep":
+    if effect_name == "original":
+        y_out = y.copy()
+    elif effect_name == "deep":
         y_out = librosa.effects.pitch_shift(y, sr=sr, n_steps=-6)
         D = librosa.stft(y_out)
         freqs = librosa.fft_frequencies(sr=sr)
@@ -97,7 +96,7 @@ def apply_effect(y, sr, effect_name):
     else:
         y_out = y
 
-    # Always normalize after effect
+    # Always normalize after processing
     peak = np.max(np.abs(y_out))
     if peak > 0:
         y_out = y_out / peak * 0.95
@@ -117,13 +116,13 @@ if uploaded is not None:
             y, sr = librosa.load(tmp_path, sr=None, mono=True)
             os.unlink(tmp_path)
 
-            # Optional noise reduction + normalization (applied first)
+            # Optional noise reduction (applied first)
             if reduce_noise:
                 y = reduce_noise_and_normalize(y, sr)
 
             y_mod = apply_effect(y, sr, EFFECTS[effect])
 
-            # WAV buffer for playback and as source for MP3
+            # WAV buffer for playback and conversion
             wav_buf = BytesIO()
             sf.write(wav_buf, y_mod, sr, format="WAV")
             wav_buf.seek(0)
@@ -146,9 +145,9 @@ if uploaded is not None:
 
             if download_format == "WAV":
                 st.download_button(
-                    label="Download modified audio (WAV)",
+                    label="Download audio (WAV)",
                     data=wav_bytes,
-                    file_name=f"modified_{effect_key}{noise_tag}_{base_name}.wav",
+                    file_name=f"{effect_key}{noise_tag}_{base_name}.wav",
                     mime="audio/wav"
                 )
             else:
@@ -158,9 +157,9 @@ if uploaded is not None:
                 mp3_bytes = mp3_buf.getvalue()
 
                 st.download_button(
-                    label="Download modified audio (MP3)",
+                    label="Download audio (MP3)",
                     data=mp3_bytes,
-                    file_name=f"modified_{effect_key}{noise_tag}_{base_name}.mp3",
+                    file_name=f"{effect_key}{noise_tag}_{base_name}.mp3",
                     mime="audio/mpeg"
                 )
 
@@ -180,13 +179,13 @@ if uploaded is not None:
                     plt.close(fig1)
 
                 with col2:
-                    st.write("Modified")
+                    st.write("Processed")
                     fig2, ax2 = plt.subplots(figsize=(8, 4))
                     librosa.display.specshow(
                         librosa.amplitude_to_db(np.abs(librosa.stft(y_mod)), ref=np.max),
                         sr=sr, x_axis="time", y_axis="hz", ax=ax2
                     )
-                    ax2.set_title("Modified")
+                    ax2.set_title("Processed")
                     fig2.tight_layout()
                     st.pyplot(fig2)
                     plt.close(fig2)
@@ -196,4 +195,4 @@ if uploaded is not None:
             st.info("Make sure the file is a valid MP3 or WAV. For MP3 support, ffmpeg must be available. Noise reduction works best when the first half-second contains mostly background noise.")
 
 st.markdown("---")
-st.caption("Effects are approximate DSP transformations (pitch + spectral shaping). Noise reduction uses simple spectral subtraction. For higher quality results consider specialized tools such as RVC or noisereduce. API keys are accepted but not required.")
+st.caption("Select 'Original (no modification)' to keep the voice unchanged. Optional noise reduction + normalization can still be applied. Effects are approximate DSP transformations. API keys are accepted but not required.")

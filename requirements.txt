@@ -4,3 +4,4 @@ numpy>=1.24.0
 soundfile>=0.12.1
 matplotlib>=3.7.0
 pydub>=0.25.1
+audioop-lts; python_version >= "3.13"

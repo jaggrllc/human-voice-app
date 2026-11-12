@@ -6,6 +6,7 @@ from io import BytesIO
 import tempfile
 import os
 from pydub import AudioSegment
+import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="Voice Modifier", page_icon="🎙️", layout="wide")
 
@@ -131,18 +132,30 @@ if uploaded is not None:
 
             with st.expander("Show spectrograms (original vs modified)"):
                 col1, col2 = st.columns(2)
+
                 with col1:
                     st.write("Original")
-                    st.pyplot(librosa.display.specshow(
+                    fig1, ax1 = plt.subplots(figsize=(8, 4))
+                    librosa.display.specshow(
                         librosa.amplitude_to_db(np.abs(librosa.stft(y)), ref=np.max),
-                        sr=sr, x_axis="time", y_axis="hz"
-                    ))
+                        sr=sr, x_axis="time", y_axis="hz", ax=ax1
+                    )
+                    ax1.set_title("Original")
+                    fig1.tight_layout()
+                    st.pyplot(fig1)
+                    plt.close(fig1)
+
                 with col2:
                     st.write("Modified")
-                    st.pyplot(librosa.display.specshow(
+                    fig2, ax2 = plt.subplots(figsize=(8, 4))
+                    librosa.display.specshow(
                         librosa.amplitude_to_db(np.abs(librosa.stft(y_mod)), ref=np.max),
-                        sr=sr, x_axis="time", y_axis="hz"
-                    ))
+                        sr=sr, x_axis="time", y_axis="hz", ax=ax2
+                    )
+                    ax2.set_title("Modified")
+                    fig2.tight_layout()
+                    st.pyplot(fig2)
+                    plt.close(fig2)
 
         except Exception as e:
             st.error(f"Error processing file: {e}")

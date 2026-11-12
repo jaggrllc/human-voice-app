@@ -7,6 +7,7 @@ import tempfile
 import os
 from pydub import AudioSegment
 import matplotlib.pyplot as plt
+import shutil
 
 st.set_page_config(page_title="Voice Modifier", page_icon="🎙️", layout="wide")
 
@@ -38,24 +39,26 @@ effect = st.selectbox("Choose effect", list(EFFECTS.keys()))
 reduce_noise = st.checkbox("Remove background noise and normalize audio", value=False)
 make_stereo = st.checkbox("Output as stereo", value=True)
 
+# Check if ffmpeg is available
+ffmpeg_available = shutil.which("ffmpeg") is not None
+if not ffmpeg_available:
+    st.warning("MP3 download is unavailable (ffmpeg not found). WAV download works normally.")
+
 def to_stereo(y, sr):
     """Convert mono to stereo with light widening, or keep stereo."""
     if y.ndim == 1:
-        # Create dual-mono with slight delay on right channel for width
-        delay_samples = int(0.012 * sr)  # ~12 ms
+        delay_samples = int(0.012 * sr)
         left = y
         right = np.pad(y, (delay_samples, 0))[:len(y)]
-        # Slight level difference
         right = right * 0.97
         y_stereo = np.vstack([left, right])
         return y_stereo
     else:
-        return y  # already stereo
+        return y
 
 def reduce_noise_and_normalize(y, sr):
     """Simple spectral noise reduction + peak normalization (works on mono or stereo)."""
     if y.ndim == 2:
-        # Process each channel
         cleaned = [reduce_noise_and_normalize(ch, sr) for ch in y]
         return np.vstack(cleaned)
 
@@ -136,21 +139,18 @@ if uploaded is not None:
                 tmp.write(uploaded.read())
                 tmp_path = tmp.name
 
-            # Load as multi-channel (stereo if available)
             y, sr = librosa.load(tmp_path, sr=None, mono=False)
             os.unlink(tmp_path)
 
-            # Force stereo if requested
             if make_stereo:
                 y = to_stereo(y, sr)
 
-            # Optional noise reduction
             if reduce_noise:
                 y = reduce_noise_and_normalize(y, sr)
 
             y_mod = apply_effect(y, sr, EFFECTS[effect])
 
-            # Write WAV (handles mono or stereo)
+            # Write WAV
             wav_buf = BytesIO()
             sf.write(wav_buf, y_mod.T if y_mod.ndim == 2 else y_mod, sr, format="WAV")
             wav_buf.seek(0)
@@ -159,10 +159,14 @@ if uploaded is not None:
             st.success("Processing complete")
             st.audio(wav_bytes, format="audio/wav")
 
-            # Download format selector
+            # Download format selector (MP3 only if ffmpeg exists)
+            format_options = ["WAV"]
+            if ffmpeg_available:
+                format_options.append("MP3")
+
             download_format = st.radio(
                 "Download format",
-                options=["WAV", "MP3"],
+                options=format_options,
                 horizontal=True,
                 index=0
             )
@@ -193,7 +197,6 @@ if uploaded is not None:
                 )
 
             with st.expander("Show spectrograms (original vs processed)"):
-                # Use mono version for display if stereo
                 y_display = y.mean(axis=0) if y.ndim == 2 else y
                 y_mod_display = y_mod.mean(axis=0) if y_mod.ndim == 2 else y_mod
 
@@ -225,7 +228,7 @@ if uploaded is not None:
 
         except Exception as e:
             st.error(f"Error processing file: {e}")
-            st.info("Make sure the file is a valid MP3 or WAV. For MP3 support, ffmpeg must be available. Noise reduction works best when the first half-second contains mostly background noise.")
+            st.info("WAV download always works. MP3 requires ffmpeg (not available on Streamlit Cloud). Noise reduction works best when the first half-second contains mostly background noise.")
 
 st.markdown("---")
 st.caption("Select 'Original (no modification)' to keep the voice unchanged. Stereo option converts mono to stereo with light widening. Effects are approximate DSP transformations. API keys are accepted but not required.")
